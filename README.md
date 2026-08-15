@@ -44,8 +44,10 @@ TTTN/
 
 ## Mô hình bài toán
 
-- **Mạng**: đồ thị vô hướng ngẫu nhiên, mỗi node có hàng đợi dung lượng `buffer`
-  và tốc độ phục vụ `mu` gói/round.
+- **Mạng**: đồ thị vô hướng. `--topology hub` (mặc định): node 0 là hub kết nối mọi
+  node, các node khác nối vòng với nhau — tạo bottleneck tự nhiên ở hub để agent học
+  né tắc nghẽn bằng đường vòng dài hơn. `--topology random`: đồ thị ngẫu nhiên liên thông.
+  Mỗi node có hàng đợi dung lượng `buffer` và tốc độ phục vụ `mu` gói/round.
 - **Traffic**: `n_flows` luồng nguồn-đích ngẫu nhiên, mỗi luồng sinh gói theo phân
   bố Bernoulli với xác suất sao cho tổng cường độ tải xấp xỉ `load` gói/round.
 - **Agent**: tại mỗi gói đang ở đầu hàng đợi của một node, quan sát trạng thái
@@ -78,13 +80,13 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 ```bash
 # Huấn luyện DQN
-python experiments/train_dqn.py --load 0.7 --episodes 2000
+python experiments/train_dqn.py --topology hub --load 6.0 --episodes 2000
 
 # Huấn luyện Double DQN
-python experiments/train_ddqn.py --load 0.7 --episodes 2000
+python experiments/train_ddqn.py --topology hub --load 6.0 --episodes 2000
 
 # Baseline trên nhiều mức tải
-python experiments/baseline.py --loads 0.3,0.5,0.7,0.9,1.1 --episodes 50
+python experiments/baseline.py --topology hub --loads 2,4,6,8 --episodes 50
 ```
 
 Kết quả được lưu vào `results/csv/` (log CSV), `results/models/` (checkpoint).
@@ -101,6 +103,7 @@ python experiments/plot_results.py          # tạo figure từ results/csv
 | Tham số            | CLI                      | Mặc định |
 | ------------------ | ------------------------ | -------- |
 | Số node            | `--n-nodes`              | 10       |
+| Topology           | `--topology`             | hub      |
 | Dung lượng queue   | `--buffer`               | 8        |
 | Tốc độ phục vụ     | `--mu`                   | 3        |
 | Cường độ tải       | `--load`                 | 0.7      |

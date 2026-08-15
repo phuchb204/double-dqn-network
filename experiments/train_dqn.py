@@ -8,8 +8,9 @@ add_common_args(parser)
 args = parser.parse_args()
 
 tag = args.tag or f"dqn_load{args.load}"
-env_cfg = dict(n_nodes=args.n_nodes, seed=args.seed, buffer=args.buffer, mu=args.mu,
-               load=args.load, n_flows=args.n_flows, total_rounds=args.total_rounds)
+env_cfg = dict(n_nodes=args.n_nodes, seed=args.seed, topology=args.topology,
+               buffer=args.buffer, mu=args.mu, load=args.load,
+               n_flows=args.n_flows, total_rounds=args.total_rounds)
 agent_cfg = dict(hidden=args.hidden, lr=args.lr, gamma=args.gamma, batch_size=args.batch_size,
                  buffer_capacity=args.buffer_capacity, eps_start=args.eps_start,
                  eps_end=args.eps_end, eps_decay_steps=args.eps_decay_steps,

@@ -13,6 +13,8 @@ def default_env_cfg():
 def add_common_args(parser):
     parser.add_argument("--n-nodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0, help="seed topology")
+    parser.add_argument("--topology", type=str, default="hub",
+                        help="hub (bottleneck tai node 0) | random")
     parser.add_argument("--buffer", type=int, default=8)
     parser.add_argument("--mu", type=int, default=3, help="service rate (packets/round)")
     parser.add_argument("--load", type=float, default=0.7, help="traffic intensity")

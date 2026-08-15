@@ -11,7 +11,7 @@ from src.evaluate import run_baseline
 parser = argparse.ArgumentParser(description="Baseline Dijkstra shortest-path routing")
 add_common_args(parser)
 parser.add_argument("--loads", type=str, default="0.3,0.5,0.7,0.9,1.1")
-parser.add_argument("--episodes", type=int, default=50)
+parser.set_defaults(episodes=50)
 args = parser.parse_args()
 
 loads = [float(x) for x in args.loads.split(",")]
@@ -23,8 +23,9 @@ with open(out_csv, "w", newline="") as f:
     writer.writerow(["load", "episode_reward", "avg_delay_ms", "packet_loss_rate",
                      "throughput", "arrived"])
     for load in loads:
-        env_cfg = dict(n_nodes=args.n_nodes, seed=args.seed, buffer=args.buffer, mu=args.mu,
-                       load=load, n_flows=args.n_flows, total_rounds=args.total_rounds)
+        env_cfg = dict(n_nodes=args.n_nodes, seed=args.seed, topology=args.topology,
+                       buffer=args.buffer, mu=args.mu, load=load,
+                       n_flows=args.n_flows, total_rounds=args.total_rounds)
         summ, _rows = run_baseline(env_cfg, n_episodes=args.episodes)
         writer.writerow([load, round(summ["episode_reward"], 4),
                          round(summ["avg_delay_ms"], 4),

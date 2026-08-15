@@ -4,17 +4,36 @@ import numpy as np
 
 
 class NetworkTopology:
-    """Sinh đồ thị mạng (random connected graph) và ma trận kề."""
+    """Sinh đồ thị mạng và ma trận kề.
 
-    def __init__(self, n_nodes, seed=0, min_degree=2, max_degree=4):
+    topology='random': đồ thị ngẫu nhiên liên thông, bậc giới hạn.
+    topology='hub':    hub-and-spoke (node 0 là trung tâm, các node khác nối
+                       vòng với nhau) — tạo bottleneck tự nhiên để agent học
+                       né tắc nghẽn bằng đường vòng dài hơn.
+    """
+
+    def __init__(self, n_nodes, seed=0, max_degree=4, topology="random"):
         self.n_nodes = n_nodes
         self.seed = seed
+        self.topology = topology
         rng = random.Random(seed)
         self.adj = [set() for _ in range(n_nodes)]
 
-        edges = set()
+        if topology == "hub":
+            self._build_hub(rng, max_degree)
+        else:
+            self._build_random(rng, max_degree)
+
+        self.adj = [sorted(s) for s in self.adj]
+        self.adj_matrix = np.zeros((n_nodes, n_nodes), dtype=np.float32)
         for u in range(n_nodes):
-            targets = list(range(n_nodes))
+            for v in self.adj[u]:
+                self.adj_matrix[u, v] = 1.0
+
+    def _build_random(self, rng, max_degree):
+        edges = set()
+        for u in range(self.n_nodes):
+            targets = list(range(self.n_nodes))
             targets.remove(u)
             rng.shuffle(targets)
             for v in targets:
@@ -29,13 +48,28 @@ class NetworkTopology:
                 edges.add((u, v))
                 if len(self.adj[u]) >= max_degree:
                     break
-
         self._ensure_connected(rng)
-        self.adj = [sorted(s) for s in self.adj]
-        self.adj_matrix = np.zeros((n_nodes, n_nodes), dtype=np.float32)
-        for u in range(n_nodes):
-            for v in self.adj[u]:
-                self.adj_matrix[u, v] = 1.0
+
+    def _build_hub(self, rng, max_degree):
+        hub = 0
+        leaves = list(range(1, self.n_nodes))
+        for leaf in leaves:
+            self.adj[hub].add(leaf)
+            self.adj[leaf].add(hub)
+        if len(leaves) >= 3:
+            for i in range(len(leaves)):
+                a = leaves[i]
+                b = leaves[(i + 1) % len(leaves)]
+                self.adj[a].add(b)
+                self.adj[b].add(a)
+        candidates = [(a, b) for a in leaves for b in leaves
+                      if a < b and b not in self.adj[a] and a != hub and b != hub]
+        rng.shuffle(candidates)
+        for a, b in candidates:
+            if len(self.adj[a]) >= max_degree or len(self.adj[b]) >= max_degree:
+                continue
+            self.adj[a].add(b)
+            self.adj[b].add(a)
 
     def _ensure_connected(self, rng):
         visited = {0}
@@ -70,12 +104,14 @@ class RoutingEnv:
     Queue đầy -> drop. Gói đến đích -> hoàn thành.
     """
 
-    def __init__(self, n_nodes=10, seed=0, buffer=8, mu=3, load=0.7,
-                 n_flows=8, total_rounds=40, time_per_round=5.0,
+    def __init__(self, n_nodes=10, seed=0, topology="random", buffer=8, mu=3,
+                 load=0.7, n_flows=8, total_rounds=40, time_per_round=5.0,
                  max_hops=None, hop_penalty=0.02, drop_reward=-1.0,
                  arrive_reward=1.0, invalid_reward=-1.0):
-        self.topology = NetworkTopology(n_nodes, seed=seed)
+        self.topology_obj = NetworkTopology(n_nodes, seed=seed, topology=topology)
+        self.topology = self.topology_obj
         self.n_nodes = n_nodes
+        self.topology_name = topology
         self.buffer = buffer
         self.mu = mu
         self.load = load
@@ -94,7 +130,11 @@ class RoutingEnv:
         self._init_flows()
 
     def _init_flows(self):
-        pairs = [(s, d) for s in range(self.n_nodes) for d in range(self.n_nodes) if s != d]
+        if self.topology_name == "hub":
+            pool = list(range(1, self.n_nodes))
+        else:
+            pool = list(range(self.n_nodes))
+        pairs = [(s, d) for s in pool for d in pool if s != d]
         rng = random.Random(0)
         rng.shuffle(pairs)
         self.flow_pairs = pairs[: self.n_flows]
@@ -136,7 +176,6 @@ class RoutingEnv:
         self.pending = None
         self._round_items = []
         self._round_idx = 0
-        self._round_active = False
         self._episode_reward = 0.0
 
         self._advance()
@@ -158,19 +197,13 @@ class RoutingEnv:
 
     def _advance(self):
         while self.pending is None and self.t < self.total_rounds:
-            if not self._round_active:
+            if self._round_idx >= len(self._round_items):
                 self._arrivals()
                 self._start_round()
-                self._round_active = True
-                if self._round_idx >= len(self._round_items):
-                    self._round_active = False
-                    self.t += 1
-                    continue
-                self.pending = self._round_items[self._round_idx]
-                return
-            if self._round_idx >= len(self._round_items):
-                self._round_active = False
                 self.t += 1
+                if self._round_idx < len(self._round_items):
+                    self.pending = self._round_items[self._round_idx]
+                    return
                 continue
             self.pending = self._round_items[self._round_idx]
             return
@@ -185,7 +218,7 @@ class RoutingEnv:
                     self.queues[src].append({
                         "dst": dst,
                         "hops": 0,
-                        "t_birth": self.t + 1,
+                        "t_birth": self.t,
                         "t_arrive": None,
                     })
 
@@ -193,6 +226,8 @@ class RoutingEnv:
         assert not self.done, "episode da ket thuc"
         node, packet = self.pending
         self._round_idx += 1
+        assert len(self.queues[node]) > 0 and self.queues[node][0] is packet
+        self.queues[node].pop(0)
         action = int(action)
         r = 0.0
 
