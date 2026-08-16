@@ -7,7 +7,7 @@ parser = argparse.ArgumentParser(description="Train Double DQN")
 add_common_args(parser)
 args = parser.parse_args()
 
-tag = args.tag or f"ddqn_load{args.load}"
+tag = args.tag or f"ddqn_load{args.load}_s{args.run_seed}"
 env_cfg = dict(n_nodes=args.n_nodes, seed=args.seed, topology=args.topology,
                buffer=args.buffer, mu=args.mu, load=args.load,
                n_flows=args.n_flows, total_rounds=args.total_rounds)

@@ -15,10 +15,13 @@ import pandas as pd
 
 def parse_tag(path):
     name = os.path.basename(path).replace(".csv", "")
+    m = re.match(r"(dqn|ddqn)_load([0-9.]+)_s([0-9]+)", name)
+    if m:
+        return m.group(1), float(m.group(2)), int(m.group(3))
     m = re.match(r"(dqn|ddqn)_load([0-9.]+)", name)
-    if not m:
-        return None
-    return m.group(1), float(m.group(2))
+    if m:
+        return m.group(1), float(m.group(2)), 0
+    return None
 
 
 def load_training(csv_dir):
@@ -28,10 +31,11 @@ def load_training(csv_dir):
         tag = parse_tag(f)
         if tag is None:
             continue
-        algo, load = tag
+        algo, load, seed = tag
         df = pd.read_csv(f)
         df["algo"] = algo
-        dfs.setdefault(load, []).append((algo, df))
+        df["seed"] = seed
+        dfs.setdefault(load, []).append(df)
     return dfs
 
 
@@ -42,26 +46,50 @@ def load_baseline(csv_dir):
     return pd.read_csv(path)
 
 
+def _series_mean_std(dfs, column, window=20):
+    merged = pd.concat([d[["episode", column]].dropna() for d in dfs], ignore_index=True)
+    g = merged.groupby("episode")[column].agg(["mean", "std"]).reset_index()
+    mean = g["mean"].rolling(window, min_periods=1).mean()
+    std = g["std"].rolling(window, min_periods=1).mean()
+    return g["episode"].values, mean.values, std.values
+
+
 def plot_training_curves(training, out_dir):
     colors = {"dqn": "#1f77b4", "ddqn": "#ff7f0e"}
-    for load, entries in training.items():
+    for load, dfs in training.items():
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-        for algo, df in entries:
+        specs = [
+            (axes[0, 0], "train_reward", "Reward/episode"),
+            (axes[0, 1], "train_loss", "Loss"),
+            (axes[1, 0], "train_avg_delay_ms", "Avg delay (ms)"),
+            (axes[1, 1], "train_loss_rate", "Packet loss rate"),
+        ]
+        for algo in ["dqn", "ddqn"]:
+            sub = [d for d in dfs if d["algo"].iloc[0] == algo]
+            if not sub:
+                continue
             c = colors[algo]
-            axes[0, 0].plot(df["episode"], df["train_reward"].rolling(20, min_periods=1).mean(), label=f"{algo}", color=c)
-            axes[0, 1].plot(df["episode"], df["train_loss"].rolling(20, min_periods=1).mean(), label=f"{algo}", color=c)
-            axes[1, 0].plot(df["episode"], df["train_avg_delay_ms"].rolling(20, min_periods=1).mean(), label=f"{algo}", color=c)
-            axes[1, 1].plot(df["episode"], df["train_loss_rate"].rolling(20, min_periods=1).mean(), label=f"{algo}", color=c)
-            if "eval_reward" in df and df["eval_reward"].notna().any():
+            for ax, col, title in specs:
+                x, y, s = _series_mean_std(sub, col)
+                ax.plot(x, y, label=algo, color=c)
+                ax.fill_between(x, y - s, y + s, color=c, alpha=0.15)
+                ax.set_title(title)
+        for algo in ["dqn", "ddqn"]:
+            sub = [d for d in dfs if d["algo"].iloc[0] == algo]
+            if not sub:
+                continue
+            c = colors[algo]
+            for df in sub:
                 ev = df.dropna(subset=["eval_reward"])
-                axes[0, 0].plot(ev["episode"], ev["eval_reward"], "o", color=c, alpha=0.5, label=f"{algo} (eval)")
-        axes[0, 0].set_title("Reward/episode"); axes[0, 0].legend()
-        axes[0, 1].set_title("Loss"); axes[0, 1].legend()
-        axes[1, 0].set_title("Avg delay (ms)"); axes[1, 0].legend()
-        axes[1, 1].set_title("Packet loss rate"); axes[1, 1].legend()
+                if len(ev):
+                    axes[0, 0].plot(ev["episode"], ev["eval_reward"], "o", color=c, alpha=0.4)
+        axes[0, 0].legend()
+        axes[0, 1].legend()
+        axes[1, 0].legend()
+        axes[1, 1].legend()
         for ax in axes.flat:
             ax.set_xlabel("episode")
-        fig.suptitle(f"Training curves (load={load})")
+        fig.suptitle(f"Training curves (load={load}, mean±std over seeds)")
         fig.tight_layout()
         fig.savefig(os.path.join(out_dir, f"training_load{load}.png"), dpi=150)
         plt.close(fig)
@@ -70,43 +98,64 @@ def plot_training_curves(training, out_dir):
 
 def final_eval_summary(training, baseline):
     rows = []
-    for load, entries in training.items():
-        for algo, df in entries:
-            ev = df.dropna(subset=["eval_reward"])
-            if len(ev) == 0:
+    for load, dfs in training.items():
+        for algo in ["dqn", "ddqn"]:
+            sub = [d for d in dfs if d["algo"].iloc[0] == algo]
+            if not sub:
                 continue
-            last = ev.tail(1).iloc[0]
-            rows.append({"load": load, "algo": algo,
-                         "reward": last["eval_reward"],
-                         "delay_ms": last["eval_avg_delay_ms"],
-                         "loss_rate": last["eval_loss_rate"],
-                         "throughput": last["eval_throughput"]})
+            for df in sub:
+                ev = df.dropna(subset=["eval_reward"])
+                if len(ev) == 0:
+                    continue
+                last = ev.tail(1).iloc[0]
+                rows.append({"load": load, "algo": algo, "seed": df["seed"].iloc[0],
+                             "reward": last["eval_reward"],
+                             "delay_ms": last["eval_avg_delay_ms"],
+                             "loss_rate": last["eval_loss_rate"],
+                             "throughput": last["eval_throughput"]})
     if baseline is not None:
         for _, row in baseline.iterrows():
-            rows.append({"load": row["load"], "algo": "dijkstra",
-                         "reward": row["episode_reward"], "delay_ms": row["avg_delay_ms"],
-                         "loss_rate": row["packet_loss_rate"], "throughput": row["throughput"]})
-    return pd.DataFrame(rows)
+            for s in [0]:
+                rows.append({"load": row["load"], "algo": "dijkstra", "seed": s,
+                             "reward": row["episode_reward"], "delay_ms": row["avg_delay_ms"],
+                             "loss_rate": row["packet_loss_rate"], "throughput": row["throughput"]})
+    df = pd.DataFrame(rows)
+    if len(df) == 0:
+        return df
+    g = df.groupby(["load", "algo"])
+    out = pd.DataFrame({
+        "reward": g["reward"].mean(),
+        "reward_std": g["reward"].std(),
+        "delay_ms": g["delay_ms"].mean(),
+        "delay_ms_std": g["delay_ms"].std(),
+        "loss_rate": g["loss_rate"].mean(),
+        "loss_rate_std": g["loss_rate"].std(),
+        "throughput": g["throughput"].mean(),
+        "throughput_std": g["throughput"].std(),
+        "n_seeds": g.size(),
+    }).reset_index()
+    return out
 
 
 def plot_comparison_bars(summary, out_dir):
     if len(summary) == 0:
         return
-    metrics = ["reward", "delay_ms", "loss_rate", "throughput"]
-    widths = 0.25
+    metrics = [("reward", "reward_std"), ("delay_ms", "delay_ms_std"),
+               ("loss_rate", "loss_rate_std"), ("throughput", "throughput_std")]
     for load in sorted(summary["load"].unique()):
         sub = summary[summary["load"] == load]
         algos = sorted(sub["algo"].unique())
         fig, axes = plt.subplots(1, 4, figsize=(16, 4))
-        for ax, metric in zip(axes, metrics):
+        for ax, (metric, metric_std) in zip(axes, metrics):
             for i, algo in enumerate(algos):
                 row = sub[sub["algo"] == algo].iloc[0]
-                ax.bar(i, row[metric], width=widths, label=algo)
+                err = row.get(metric_std, 0.0) or 0.0
+                ax.bar(i, row[metric], width=0.5, yerr=err, capsize=4, label=algo)
             ax.set_title(metric)
             ax.set_xticks(range(len(algos)))
             ax.set_xticklabels(algos)
             ax.legend()
-        fig.suptitle(f"Final comparison (load={load})")
+        fig.suptitle(f"Final comparison (load={load}, mean±std over seeds)")
         fig.tight_layout()
         fig.savefig(os.path.join(out_dir, f"comparison_load{load}.png"), dpi=150)
         plt.close(fig)
